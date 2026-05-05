@@ -194,6 +194,8 @@ typedef struct ASTNode {
 typedef struct {
     Lexer *lexer;
     Token current;
+    int parse_depth;
+    FILE *debug_out;
 } Parser;
 
 ASTNode* ast_create(const char *type) {
@@ -204,10 +206,12 @@ ASTNode* ast_create(const char *type) {
     return n;
 }
 
-Parser* parser_create(const char *filename) {
+Parser* parser_create(const char *filename, FILE *debug_file) {
     Parser *p = malloc(sizeof(Parser));
     p->lexer = lexer_create(filename);
     p->current = lexer_next_token(p->lexer);
+    p->parse_depth = 0;
+    p->debug_out = debug_file;
     return p;
 }
 
@@ -215,46 +219,74 @@ void parser_advance(Parser *p) {
     p->current = lexer_next_token(p->lexer);
 }
 
+void print_indent(int depth, FILE *out) {
+    for (int i = 0; i < depth * 2; i++) fprintf(out, " ");
+}
+
 ASTNode* parse_expression(Parser *p);
 
 ASTNode* parse_primary(Parser *p) {
+    print_indent(p->parse_depth, p->debug_out);
+    fprintf(p->debug_out, ">> parse_primary() - Current token: %s (%s)\n", 
+            token_type_name(p->current.type), p->current.lexeme);
+    p->parse_depth++;
+    
     if (p->current.type == TOKEN_NUM) {
         ASTNode *n = ast_create("number");
         sprintf(n->value, "%d", p->current.value);
+        print_indent(p->parse_depth, p->debug_out);
+        fprintf(p->debug_out, "<< Parsed NUMBER: %s\n", n->value);
         parser_advance(p);
+        p->parse_depth--;
         return n;
     }
     
     if (p->current.type == TOKEN_ID) {
         ASTNode *n = ast_create("identifier");
         strcpy(n->value, p->current.lexeme);
+        print_indent(p->parse_depth, p->debug_out);
+        fprintf(p->debug_out, "<< Parsed IDENTIFIER: %s\n", n->value);
         parser_advance(p);
+        p->parse_depth--;
         return n;
     }
     
     if (p->current.type == TOKEN_STR) {
         ASTNode *n = ast_create("string");
         strcpy(n->value, p->current.lexeme);
+        print_indent(p->parse_depth, p->debug_out);
+        fprintf(p->debug_out, "<< Parsed STRING: %s\n", n->value);
         parser_advance(p);
+        p->parse_depth--;
         return n;
     }
     
     if (p->current.type == TOKEN_LPAREN) {
+        print_indent(p->parse_depth, p->debug_out);
+        fprintf(p->debug_out, "[EXPR in PARENS]\n");
         parser_advance(p);
         ASTNode *expr = parse_expression(p);
         if (p->current.type == TOKEN_RPAREN) parser_advance(p);
+        p->parse_depth--;
         return expr;
     }
     
+    p->parse_depth--;
     return ast_create("empty");
 }
 
 ASTNode* parse_term(Parser *p) {
+    print_indent(p->parse_depth, p->debug_out);
+    fprintf(p->debug_out, ">> parse_term()\n");
+    p->parse_depth++;
+    
     ASTNode *left = parse_primary(p);
     
     while (p->current.type == TOKEN_MUL || 
            p->current.type == TOKEN_DIV || 
            p->current.type == TOKEN_MOD) {
+        print_indent(p->parse_depth, p->debug_out);
+        fprintf(p->debug_out, "[OPERATOR: %s]\n", p->current.lexeme);
         ASTNode *op = ast_create("binary_op");
         strcpy(op->value, p->current.lexeme);
         parser_advance(p);
@@ -263,14 +295,21 @@ ASTNode* parse_term(Parser *p) {
         left = op;
     }
     
+    p->parse_depth--;
     return left;
 }
 
 ASTNode* parse_expression(Parser *p) {
+    print_indent(p->parse_depth, p->debug_out);
+    fprintf(p->debug_out, ">> parse_expression()\n");
+    p->parse_depth++;
+    
     ASTNode *left = parse_term(p);
     
     while (p->current.type == TOKEN_PLUS || 
            p->current.type == TOKEN_MINUS) {
+        print_indent(p->parse_depth, p->debug_out);
+        fprintf(p->debug_out, "[OPERATOR: %s]\n", p->current.lexeme);
         ASTNode *op = ast_create("binary_op");
         strcpy(op->value, p->current.lexeme);
         parser_advance(p);
@@ -279,6 +318,7 @@ ASTNode* parse_expression(Parser *p) {
         left = op;
     }
     
+    p->parse_depth--;
     return left;
 }
 
@@ -286,6 +326,8 @@ ASTNode* parse_statement(Parser *p);
 
 ASTNode* parse_block(Parser *p) {
     ASTNode *block = ast_create("block");
+    print_indent(p->parse_depth, p->debug_out);
+    fprintf(p->debug_out, "[ENTERING BLOCK]\n");
     parser_advance(p);
     
     ASTNode *current = NULL;
@@ -300,66 +342,104 @@ ASTNode* parse_block(Parser *p) {
         }
     }
     
-    if (p->current.type == TOKEN_RBRACE) parser_advance(p);
+    if (p->current.type == TOKEN_RBRACE) {
+        print_indent(p->parse_depth, p->debug_out);
+        fprintf(p->debug_out, "[EXITING BLOCK]\n");
+        parser_advance(p);
+    }
     return block;
 }
 
 ASTNode* parse_statement(Parser *p) {
+    print_indent(p->parse_depth, p->debug_out);
+    fprintf(p->debug_out, ">> parse_statement() - Current: %s\n", token_type_name(p->current.type));
+    p->parse_depth++;
+    
     if (p->current.type == TOKEN_INT || 
         p->current.type == TOKEN_FLOAT || 
         p->current.type == TOKEN_CHAR) {
         
         ASTNode *decl = ast_create("declaration");
         strcpy(decl->value, p->current.lexeme);
-        printf("  [PARSING] Declaration: type=%s\n", p->current.lexeme);
+        print_indent(p->parse_depth, p->debug_out);
+        fprintf(p->debug_out, "[DECLARATION] type=%s\n", p->current.lexeme);
         parser_advance(p);
         
         if (p->current.type == TOKEN_ID) {
             ASTNode *id = ast_create("identifier");
             strcpy(id->value, p->current.lexeme);
-            printf("    [PARSED] Variable name: %s\n", p->current.lexeme);
+            print_indent(p->parse_depth, p->debug_out);
+            fprintf(p->debug_out, "[VARIABLE] name=%s\n", p->current.lexeme);
             decl->left = id;
             parser_advance(p);
         }
         
-        if (p->current.type == TOKEN_SEMICOLON) parser_advance(p);
+        if (p->current.type == TOKEN_SEMICOLON) {
+            print_indent(p->parse_depth, p->debug_out);
+            fprintf(p->debug_out, "[SEMICOLON]\n");
+            parser_advance(p);
+        }
+        
+        p->parse_depth--;
         return decl;
     }
     
     if (p->current.type == TOKEN_ID) {
         ASTNode *assign = ast_create("assignment");
         strcpy(assign->value, p->current.lexeme);
-        printf("  [PARSING] Assignment: variable=%s\n", p->current.lexeme);
+        print_indent(p->parse_depth, p->debug_out);
+        fprintf(p->debug_out, "[ASSIGNMENT] var=%s\n", p->current.lexeme);
         parser_advance(p);
         
         if (p->current.type == TOKEN_ASSIGN) {
-            printf("    [PARSING] Assignment operator found\n");
+            print_indent(p->parse_depth, p->debug_out);
+            fprintf(p->debug_out, "[ASSIGN OPERATOR]\n");
             parser_advance(p);
             assign->left = parse_expression(p);
         }
         
-        if (p->current.type == TOKEN_SEMICOLON) parser_advance(p);
+        if (p->current.type == TOKEN_SEMICOLON) {
+            print_indent(p->parse_depth, p->debug_out);
+            fprintf(p->debug_out, "[SEMICOLON]\n");
+            parser_advance(p);
+        }
+        
+        p->parse_depth--;
         return assign;
     }
     
     if (p->current.type == TOKEN_PRINT) {
         ASTNode *print = ast_create("print");
-        printf("  [PARSING] Print statement\n");
+        print_indent(p->parse_depth, p->debug_out);
+        fprintf(p->debug_out, "[PRINT STATEMENT]\n");
         parser_advance(p);
         
         if (p->current.type == TOKEN_LPAREN) {
+            print_indent(p->parse_depth, p->debug_out);
+            fprintf(p->debug_out, "[LPAREN]\n");
             parser_advance(p);
             print->left = parse_expression(p);
-            if (p->current.type == TOKEN_RPAREN) parser_advance(p);
+            if (p->current.type == TOKEN_RPAREN) {
+                print_indent(p->parse_depth, p->debug_out);
+                fprintf(p->debug_out, "[RPAREN]\n");
+                parser_advance(p);
+            }
         }
         
-        if (p->current.type == TOKEN_SEMICOLON) parser_advance(p);
+        if (p->current.type == TOKEN_SEMICOLON) {
+            print_indent(p->parse_depth, p->debug_out);
+            fprintf(p->debug_out, "[SEMICOLON]\n");
+            parser_advance(p);
+        }
+        
+        p->parse_depth--;
         return print;
     }
     
     if (p->current.type == TOKEN_IF) {
         ASTNode *ifstmt = ast_create("if");
-        printf("  [PARSING] If statement\n");
+        print_indent(p->parse_depth, p->debug_out);
+        fprintf(p->debug_out, "[IF STATEMENT]\n");
         parser_advance(p);
         
         if (p->current.type == TOKEN_LPAREN) {
@@ -372,12 +452,14 @@ ASTNode* parse_statement(Parser *p) {
             ifstmt->right = parse_block(p);
         }
         
+        p->parse_depth--;
         return ifstmt;
     }
     
     if (p->current.type == TOKEN_WHILE) {
         ASTNode *whilestmt = ast_create("while");
-        printf("  [PARSING] While statement\n");
+        print_indent(p->parse_depth, p->debug_out);
+        fprintf(p->debug_out, "[WHILE STATEMENT]\n");
         parser_advance(p);
         
         if (p->current.type == TOKEN_LPAREN) {
@@ -390,9 +472,11 @@ ASTNode* parse_statement(Parser *p) {
             whilestmt->right = parse_block(p);
         }
         
+        p->parse_depth--;
         return whilestmt;
     }
     
+    p->parse_depth--;
     parser_advance(p);
     return ast_create("empty");
 }
@@ -432,10 +516,10 @@ SymbolTable* symtab_create() {
     return st;
 }
 
-void symtab_add(SymbolTable *st, const char *name, const char *type) {
+void symtab_add(SymbolTable *st, const char *name, const char *type, FILE *debug) {
     strcpy(st->symbols[st->count].name, name);
     strcpy(st->symbols[st->count].type, type);
-    printf("  [SYMBOL TABLE] Added: %s (type: %s)\n", name, type);
+    fprintf(debug, "  [SYMBOL] Adding: %s (type: %s)\n", name, type);
     st->count++;
 }
 
@@ -446,52 +530,51 @@ int symtab_find(SymbolTable *st, const char *name) {
     return -1;
 }
 
-void codegen(ASTNode *node, FILE *out, SymbolTable *st) {
+void codegen(ASTNode *node, FILE *out, SymbolTable *st, FILE *debug) {
     if (!node) return;
     
     if (strcmp(node->type, "declaration") == 0) {
         if (node->left && node->left->value[0]) {
             fprintf(out, "DECLARE %s %s\n", node->left->value, node->value);
-            printf("  [CODE GEN] DECLARE %s %s\n", node->left->value, node->value);
+            fprintf(debug, "  [GEN] DECLARE %s %s\n", node->left->value, node->value);
         }
     }
     
     if (strcmp(node->type, "assignment") == 0) {
         if (symtab_find(st, node->value) == -1) {
-            fprintf(out, "; WARNING: Undefined variable '%s'\n", node->value);
-            printf("  [WARNING] Undefined variable: %s\n", node->value);
+            fprintf(debug, "  [ERROR] Undefined variable: %s\n", node->value);
         }
-        codegen(node->left, out, st);
+        codegen(node->left, out, st, debug);
         fprintf(out, "STORE %s\n", node->value);
-        printf("  [CODE GEN] STORE %s\n", node->value);
+        fprintf(debug, "  [GEN] STORE %s\n", node->value);
     }
     
     if (strcmp(node->type, "print") == 0) {
-        codegen(node->left, out, st);
+        codegen(node->left, out, st, debug);
         fprintf(out, "PRINT\n");
-        printf("  [CODE GEN] PRINT\n");
+        fprintf(debug, "  [GEN] PRINT\n");
     }
     
     if (strcmp(node->type, "number") == 0) {
         fprintf(out, "LOAD %s\n", node->value);
-        printf("  [CODE GEN] LOAD %s\n", node->value);
+        fprintf(debug, "  [GEN] LOAD %s\n", node->value);
     }
     
     if (strcmp(node->type, "identifier") == 0) {
         fprintf(out, "LOAD %s\n", node->value);
-        printf("  [CODE GEN] LOAD %s\n", node->value);
+        fprintf(debug, "  [GEN] LOAD %s\n", node->value);
     }
     
     if (strcmp(node->type, "binary_op") == 0) {
-        codegen(node->left, out, st);
-        codegen(node->right, out, st);
+        codegen(node->left, out, st, debug);
+        codegen(node->right, out, st, debug);
         fprintf(out, "%s\n", node->value);
-        printf("  [CODE GEN] %s\n", node->value);
+        fprintf(debug, "  [GEN] %s\n", node->value);
     }
     
-    codegen(node->left, out, st);
-    codegen(node->right, out, st);
-    codegen(node->next, out, st);
+    codegen(node->left, out, st, debug);
+    codegen(node->right, out, st, debug);
+    codegen(node->next, out, st, debug);
 }
 
 /* ============= MAIN ============= */
@@ -546,10 +629,11 @@ int main(int argc, char *argv[]) {
     fprintf(output, "; ===== PHASE 2: SYNTAX ANALYSIS (TOP-DOWN PARSING) =====\n");
     fprintf(output, "; Building Abstract Syntax Tree\n\n");
     
-    Parser *parser = parser_create(argv[1]);
+    Parser *parser = parser_create(argv[1], stdout);
+    printf("Parsing...\n");
     ASTNode *ast = parse_program(parser);
     
-    printf("\nAST successfully created\n\n");
+    printf("\n[AST CONSTRUCTION COMPLETE]\n\n");
     fprintf(output, "; AST successfully created\n\n");
     
     /* ===== PHASE 3: SEMANTIC ANALYSIS ===== */
@@ -565,13 +649,13 @@ int main(int argc, char *argv[]) {
     while (current) {
         if (strcmp(current->type, "declaration") == 0) {
             if (current->left && current->left->value[0]) {
-                symtab_add(symtab, current->left->value, current->value);
+                symtab_add(symtab, current->left->value, current->value, stdout);
             }
         }
         current = current->next;
     }
     
-    printf("Symbol table complete. Total symbols: %d\n\n", symtab->count);
+    printf("\nSymbol table complete. Total symbols: %d\n\n", symtab->count);
     fprintf(output, "; Symbol table: %d variables\n", symtab->count);
     for (int i = 0; i < symtab->count; i++) {
         fprintf(output, ";   %s (%s)\n", symtab->symbols[i].name, symtab->symbols[i].type);
@@ -584,7 +668,7 @@ int main(int argc, char *argv[]) {
     fprintf(output, "; Generating 3-address intermediate code\n\n");
     
     printf("Generating intermediate code...\n");
-    codegen(ast, output, symtab);
+    codegen(ast, output, symtab, stdout);
     
     fprintf(output, "\n; ===== COMPILATION COMPLETE =====\n");
     
